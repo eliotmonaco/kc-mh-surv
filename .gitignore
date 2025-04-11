@@ -3,20 +3,8 @@
 .RData
 .Ruserdata
 
-*.csv
-*.tsv
-*.xls*
-*.rds
-*.rda
-*.xml
-*.html
-
-# Spatial data
-*.dbf
-*.prj
-*.shp
-*.shx
-
 # Folders
 /data/
 /output/
+
+*.html
