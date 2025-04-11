@@ -1,22 +1,15 @@
 ---
 title: "MH survey: Exploratory plots"
-subtitle:
-author:
-  - name: "Eliot Monaco"
-    affiliation:
 date: "`r format(Sys.time(), '%B %d, %Y')`"
-output: html_notebook
+output:
+  html_notebook:
+    toc: false
 ---
-
-# Purpose
-
-Plot survey results summarized by demographic and geographic variables for exploration.
-
-# Set up environment and import data
 
 ```{r setup}
 knitr::opts_chunk$set(
-  fig.width = 9,
+  echo = FALSE,
+  fig.width = 10,
   fig.height = 9
 )
 ```
@@ -30,15 +23,11 @@ library(patchwork)
 source("fn.R")
 ```
 
-Import summarized survey results.
-
 ```{r}
 mh_sum <- readRDS("../data/3-final/summarized_results.rds")
 cbq <- readRDS("../data/3-final/codebook_question_data.rds")
 disaggs <- readRDS("../data/3-final/disaggregate_data_for_summary.rds")
 ```
-
-# Plots
 
 ```{r}
 mh_plots <- list()
@@ -63,11 +52,11 @@ for (i in 1:length(mh_sum)) {
 }
 ```
 
-## Plot tabs {.tabset}
+## {.tabset}
 
 ```{r results='asis', echo=FALSE}
-# for (i in 1:length(mh_plots)) {
-for (i in 8:9) {
+for (i in 1:length(mh_plots)) {
+# for (i in 8:9) {
   cat(paste0("### ", toupper(cbq$nm3[i]), "\n\n"))
   pw <- wrap_plots(
     mh_plots[[i]],

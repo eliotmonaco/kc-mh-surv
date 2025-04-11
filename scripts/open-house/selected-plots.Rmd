@@ -45,7 +45,7 @@ for (i in 1:length(mh_sum)) {
   lvl <- length(levels(df$defn))
   df <- df |>
     filter(!defn %in% levels(defn)[lvl])
-  mh_plots[[cbq$nm3[i]]] <- mh_barplot3(
+  mh_plots[[cbq$nm3[i]]] <- mh_barplot2(
     df,
     yvar = disaggs[[3]]$var,
     ylab = disaggs[[3]]$label,
