@@ -1,0 +1,950 @@
+---
+title: "MH survey: Data prep"
+subtitle:
+author:
+  - name: "Eliot Monaco"
+    affiliation:
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output: html_notebook
+---
+
+# Purpose
+
+Prepare results from the KCHD 2024 Mental Health Survey for analysis.
+
+# Set up environment and import data
+
+```{r setup}
+knitr::opts_chunk$set(
+  fig.width = 9,
+  fig.height = 4
+)
+```
+
+```{r message=FALSE}
+library(tidyverse)
+library(readxl)
+library(kcData)
+library(setmeup)
+library(sf)
+```
+
+```{r}
+source("fn.R")
+```
+
+Import survey results.
+
+```{r}
+surv_raw <- read_excel("../data/1-source/KC Health_raw data_Mental Health Survey Results 2024.xls")
+```
+
+Import codebook (created for this analysis based on the questions and response options in `MentalHealth_CityWideSurvey-FINAL_06.06.2024.docx`).
+
+```{r}
+file_path <- "../data/1-source/mh-codebook.xlsx"
+sh <- excel_sheets(file_path)
+codebook <- list()
+for (i in 1:length(sh)) {
+  codebook[[sh[i]]] <- read_excel(file_path, sheet = sh[i], col_types = "text")
+}
+```
+
+Load KC population data from 2023 5-year ACS.
+
+```{r}
+pop_data <- list()
+pop_data$zcta <- pop_zcta_2023acs5
+pop_data$city <- pop_city_2023acs5
+```
+
+Import HOI regions.
+
+```{r}
+hoi_regions <- st_read("../data/1-source/hoi_regions.shp", quiet = TRUE)
+```
+
+# Prep data
+
+Rename variables.
+
+```{r}
+colnames(surv_raw) <- codebook$main$nm2
+```
+
+## Validate
+
+### `id`
+
+Validate `id`.
+
+```{r}
+any(duplicated(surv_raw$id))
+```
+
+### Demographics
+
+Number of non-responses to race/ethnicity question.
+
+```{r}
+surv_raw |>
+  filter(if_all(d1.1:d1.8, ~ is.na(.x))) |>
+  nrow()
+```
+
+Number of non-responses to birth gender question.
+
+```{r}
+surv_raw |>
+  filter(is.na(d2a)) |>
+  nrow()
+```
+
+Number of non-responses to current gender question.
+
+```{r}
+surv_raw |>
+  filter(if_all(d2b.1:d2b.6, ~ is.na(.x))) |>
+  nrow()
+```
+
+Number of non-responses to age question.
+
+```{r}
+surv_raw |>
+  filter(d3 == 9) |>
+  nrow()
+```
+
+### Reversed scale question
+
+```{r}
+surv_raw |>
+  select(id, starts_with("q13.")) |>
+  bind_cols(n_unq = apply(
+    surv_raw |>
+      select(starts_with("q13.")),
+    1,
+    function(x) length(unique(x))
+  )) |>
+  filter(if_all(starts_with("q13."), ~ .x %in% 1:5)) |>
+  filter(n_unq == 1)
+```
+
+## Codebook
+
+Subset main sheet from codebook and filter for MH questions.
+
+```{r}
+cbq <- codebook$main |>
+  filter(str_detect(nm3, "^q"))
+```
+
+Convert response values and definitions to factor.
+
+```{r}
+# Factor levels are unique values
+v <- grepl("^race|^gen|^age", names(codebook))
+codebook[v] <- map(
+  codebook[v],
+  \(x) mutate(x, across(everything(), ~ factor(.x, levels = unique(.x))))
+)
+
+# Reverse factor levels
+v <- unique(cbq[which(cbq$factor == "rev"), "codesheet", drop = TRUE])
+codebook[v] <- map(
+  codebook[v],
+  \(x) mutate(x, across(everything(), ~ factor(.x, levels = rev(.x))))
+)
+
+# Factor levels as-is
+v <- unique(cbq[is.na(cbq$factor), "codesheet", drop = TRUE])
+codebook[v] <- map(
+  codebook[v],
+  \(x) mutate(x, across(everything(), ~ factor(.x, levels = .x)))
+)
+```
+
+# Check sample characteristics
+
+## Subset & config demo/geo table
+
+Configure the table of demographic and geographic variables. A "Multiple" value will be included for race and current gender variables and will apply when a response to either question contained multiple options.
+
+Race/ethnicity
+
+- The race/ethnicity question (which allows multiple options to be selected) will be broken out into `race` and `hispanic_origin` variables.
+- In the `race` variable, a race category value applies when it is the only option selected, otherwise the value is changed to "Multiple".
+- `race2` is added which collapses categories with small sample sizes into larger categories. "MENA" will be added to "White", and "African" will be added to "Black".
+- `race3` is added which collapses all responses that are not "Black" or "White" only into "Other".
+- `hispanic_origin` values are "Hispanic" (when "Hispanic" has been selected as the only option or as one of multiple options) and "Not Hispanic" (when "Hispanic" has not been selected).
+
+Age
+
+- The age group values "65-74" and "75+" will be collapsed into "65+".
+
+```{r}
+surv_demo <- surv_raw |>
+  # Select demographic & geographic vars
+  select(id, matches("^d\\d"), zip:block_lat) |>
+  mutate(
+    across(c(d2a, d3), ~ as.character(.x)),
+    across(c(block_lon, block_lat), ~ .x / 10^6)
+  ) |>
+  # Consolidate race/ethnicity vars and join definitions (original)
+  unite(
+    "race_united",
+    matches("^d1\\.\\d$"),
+    sep = "",
+    remove = TRUE,
+    na.rm = TRUE
+  ) |>
+  # Original race categories
+  left_join(
+    codebook$race |>
+      select(val, defn),
+    by = c("race_united" = "val")
+  ) |>
+  rename(race = defn) |>
+  # Collapsed race categories (1)
+  left_join(
+    codebook$race2 |>
+      select(val, defn),
+    by = c("race_united" = "val")
+  ) |>
+  rename(race2 = defn) |>
+  # Collapsed race categories (2)
+  left_join(
+    codebook$race3 |>
+      select(val, defn),
+    by = c("race_united" = "val")
+  ) |>
+  rename(race3 = defn) |>
+  # New Hispanic origin variable
+  mutate(
+    across(c(race, race2), ~ if_else(nchar(race_united) > 1, "Multiple", .x)),
+    race3 = if_else(nchar(race_united) > 1, "Other", race3),
+    hispanic_origin = if_else(
+      grepl("4", race_united),
+      "Hispanic",
+      "Not Hispanic"
+    )
+  ) |>
+  mutate(
+    race = factor(race, levels = c(
+      levels(codebook$race$defn),
+      "Multiple"
+    )),
+    race2 = factor(race2, levels = c(
+      levels(codebook$race2$defn),
+      "Multiple"
+    )),
+    race3 = factor(race3, levels = levels(codebook$race3$defn)),
+    hispanic_origin = factor(
+      hispanic_origin,
+      levels = c("Hispanic", "Not Hispanic")
+    )
+  ) |>
+  # Join birth gender definitions
+  left_join(codebook$gen1, by = c("d2a" = "val")) |>
+  rename(birth_gender = defn) |>
+  # Consolidate current gender vars and join definitions
+  unite(
+    "cg_united",
+    matches("^d2b\\.\\d$"),
+    sep = "",
+    remove = TRUE,
+    na.rm = TRUE
+  ) |>
+  left_join(codebook$gen2, by = c("cg_united" = "val")) |>
+  rename(current_gender = defn) |>
+  mutate(current_gender = if_else(
+    nchar(cg_united) > 1,
+    "Multiple",
+    current_gender
+  )) |>
+  mutate(current_gender = factor(current_gender, levels = c(
+    levels(codebook$gen2$defn),
+    "Multiple"
+  ))) |>
+  # Join collapsed age group definitions
+  left_join(codebook$age2, by = c("d3" = "val")) |>
+  rename(age_group = defn) |>
+  select(id, zip:age_group)
+```
+
+Join HOI region variable.
+
+```{r}
+surv_rgn <- surv_demo |>
+  select(id, block_lon, block_lat) |>
+  st_as_sf(coords = c("block_lon", "block_lat"), crs = 4326) |>
+  st_join(hoi_regions[, "region"])
+
+surv_demo <- surv_demo |>
+  bind_cols(
+    surv_rgn |>
+      as_tibble() |>
+      select(region)
+  )
+```
+
+```{r}
+demo_sum <- list()
+```
+
+## Geography
+
+Compare sampling by geography to census population counts.
+
+### ZCTA
+
+```{r}
+demo_sum$zcta <- surv_demo |>
+  group_by(zip) |>
+  count() |>
+  ungroup() |>
+  left_join(
+    pop_data$zcta |>
+      filter(variable == "B01001_001") |>
+      select(GEOID, estimate) |>
+      mutate(GEOID = as.numeric(GEOID)),
+    by = c("zip" = "GEOID")
+  ) |>
+  mutate(pct = pct(n, estimate, digits = 3))
+```
+
+```{r}
+demo_sum$zcta
+```
+
+```{r}
+demo_sum$zcta |>
+  mutate(zip = factor(zip)) |>
+  ggplot(aes(x = zip, y = pct)) +
+  geom_col() +
+  guides(x = guide_axis(angle = 90))
+```
+
+Are all ZIPs represented?
+
+### HOI region
+
+Summarize by region.
+
+```{r}
+demo_sum$region <- surv_demo |>
+  group_by(region) |>
+  count()
+```
+
+```{r}
+demo_sum$region
+```
+
+```{r}
+ggplot() +
+  geom_sf(
+    data = kcData::map_city_2024,
+    fill = "darkgrey",
+    color = "red"
+  ) +
+  geom_sf(
+    data = hoi_regions,
+    fill = NA,
+    color = "blue"
+  ) +
+  geom_sf(data = surv_rgn)
+```
+
+## Demographics
+
+Compare sampling by demographic variables to census population counts.
+
+### Sex
+
+```{r}
+demo_sum$sex <- surv_demo |>
+  group_by(birth_gender) |>
+  count() |>
+  ungroup() |>
+  left_join(
+    pop_data$city |>
+      filter(variable %in% c("B01001_002", "B01001_026")) |>
+      select(label, estimate) |>
+      mutate(label = str_remove_all(label, "Estimate|Total|[:punct:]")),
+    by = c("birth_gender" = "label")
+  ) |>
+  mutate(pct = pct(n, estimate, digits = 3))
+```
+
+```{r fig.width=4}
+demo_sum$sex |>
+  filter(!is.na(estimate)) |>
+  ggplot(aes(x = birth_gender, y = pct)) +
+  geom_col()
+```
+
+### Age
+
+Select population estimates for relevant ages from the ACS.
+
+```{r}
+pop_data$age <- pop_data$city |>
+  filter(
+    str_detect(label, paste0("(", paste(18:100, collapse = "|"), ").*years")),
+    concept == "Sex by Age"
+  ) |>
+  select(label, estimate) |>
+  mutate(label = str_remove_all(label, "Estimate|Total|[:punct:]")) |>
+  mutate(
+    sex = str_extract(label, "^[:alpha:]+(?=\\d)"),
+    age_group = str_extract(label, "\\d.*") |>
+      str_remove("\\syears.*")
+  )
+```
+
+Summarize estimates for each age range.
+
+```{r}
+# pop_data$age_ranges <- list(18:34, 35:44, 45:54, 55:64, 65:74, 75:85)
+pop_data$age_ranges <- list(18:34, 35:44, 45:54, 55:64, 65:85)
+
+pop_data$age_gp <- data.frame(
+  age_group = codebook$age2$defn[1:length(pop_data$age_ranges)],
+  estimate = unlist(
+    lapply(
+      pop_data$age_ranges,
+      function(x) {
+        sum(
+          pop_data$age |>
+            filter(str_detect(age_group, paste(x, collapse = "|"))) |>
+            pull(estimate)
+        )
+      }
+    )
+  )
+)
+```
+
+```{r}
+demo_sum$age <- surv_demo |>
+  group_by(age_group) |>
+  count() |>
+  ungroup() |>
+  left_join(
+    pop_data$age_gp,
+    by = "age_group"
+  ) |>
+  mutate(pct = pct(n, estimate, digits = 3))
+
+demo_sum$age
+```
+
+```{r fig.width=6}
+demo_sum$age |>
+  filter(!is.na(estimate)) |>
+  ggplot(aes(x = age_group, y = pct)) +
+  geom_col()
+```
+
+### Race
+
+```{r}
+demo_sum$race <- surv_demo |>
+  group_by(race) |>
+  count() |>
+  ungroup()
+
+demo_sum$race
+```
+
+```{r}
+demo_sum$race2 <- surv_demo |>
+  group_by(race2) |>
+  count() |>
+  ungroup()
+
+demo_sum$race2
+```
+
+```{r}
+demo_sum$race3 <- surv_demo |>
+  group_by(race3) |>
+  count() |>
+  ungroup()
+
+demo_sum$race3
+```
+
+### Hispanic origin
+
+```{r}
+demo_sum$hispanic <- surv_demo |>
+  group_by(hispanic_origin) |>
+  count() |>
+  ungroup()
+
+demo_sum$hispanic
+```
+
+# Subset MH questions
+
+Subset question data into separate dataframes.
+
+```{r}
+nm <- unique(cbq$nm3)
+
+mh <- map(
+  nm,
+  \(x) surv_demo |>
+    bind_cols(
+      surv_raw |>
+        select(all_of(cbq[which(cbq$nm3 == x), "nm2", drop = TRUE]))
+    )
+)
+names(mh) <- nm
+```
+
+# Score questions
+
+## Q8: Pre/post COVID-19
+
+```{r}
+mh$q8 <- mh$q8 |>
+  mutate(q8 = case_when(
+    q8 == 4 ~ 5,
+    q8 == 2 ~ 1,
+    .default = q8
+  ))
+
+codebook$mh8 <- tibble(
+  val = c(1, 3, 5),
+  defn = c("Better", "About the same", "Worse")
+) |>
+  mutate(across(everything(), ~ factor(.x, levels = rev(.x))))
+```
+
+```{r include=FALSE}
+# df <- data.frame(
+#   q8_orig = surv_raw$q8,
+#   q8_new = mh$q8$q8
+# )
+```
+
+## Q11: MH treatment
+
+Q11 should only be completed if the answer to Q10 is `1` ("Yes").
+
+All responses to Q10.
+
+```{r}
+surv_raw |>
+  mutate(val = as.character(q10)) |>
+  group_by(val) |>
+  count() |>
+  left_join(codebook$mh9, by = "val") |>
+  relocate(defn, .after = val)
+```
+
+Any rows where Q10 = `1` and any Q11 part = `NA`?
+
+```{r}
+surv_raw |>
+  filter(q10 == 1) |>
+  filter(if_any(q11.01:q11.10, ~ is.na(.x))) |>
+  nrow()
+```
+
+Any rows where Q10 = `2` and any Q11 part = not `NA`?
+
+```{r}
+surv_raw |>
+  filter(q10 == 2) |>
+  filter(if_any(q11.01:q11.10, ~ !is.na(.x))) |>
+  nrow()
+```
+
+Filter Q11 responses where the Q10 response is `1`.
+
+```{r}
+ids <- surv_raw |>
+  filter(q10 == 1) |>
+  pull(id)
+
+mh[grepl("^q11\\.", names(mh))] <- map(
+  mh[grepl("^q11\\.", names(mh))],
+  \(x) x |>
+    filter(id %in% ids)
+)
+```
+
+## Q13: Social isolation
+
+### Check NAs
+
+Check for `NA` values.
+
+```{r}
+apply(
+  mh$q13 |>
+    select(starts_with("q13")),
+  2,
+  function(x) sum(is.na(x))
+)
+```
+
+Count "Don't know" (`9`) responses for each question.
+
+```{r}
+apply(
+  mh$q13 |>
+    select(starts_with("q13")),
+  2,
+  function(x) sum(ifelse(x == 9, TRUE, FALSE))
+)
+```
+
+### Check "Don't knows"
+
+Number of respondents without any "Don't know" responses in Q13.
+
+```{r}
+mh$q13 |>
+  filter(!if_any(starts_with("q13."), ~ .x == 9)) |>
+  nrow()
+```
+
+Plot the number of "Don't know" responses per individual.
+
+```{r}
+mh$q13$n_dontknow <- apply(
+  mh$q13 |>
+    select(starts_with("q13.")),
+  1,
+  function(x) sum(ifelse(x == 9, TRUE, FALSE))
+)
+mh$q13$n_answered <- 11 - mh$q13$n_dontknow
+```
+
+```{r fig.width=6}
+mh$q13 |>
+  ggplot(aes(n_dontknow)) +
+  geom_histogram(binwidth = 1)
+```
+
+### Score
+
+Filter out rows in which any part has a "Don't know" response.
+
+```{r}
+mh$q13 <- mh$q13 |>
+  filter(!if_any(starts_with("q13."), ~ .x == 9))
+```
+
+Reverse scale for questions 01, 04, 07, 08, and 11 so that `1` represents low social isolation and `5` represents high social isolation.
+
+```{r}
+mh$q13 <- mh$q13 |>
+  mutate(across(
+    c(q13.01, q13.04, q13.07, q13.08, q13.11),
+    ~ case_when(
+      .x == 1 ~ 5,
+      .x == 2 ~ 4,
+      .x == 4 ~ 2,
+      .x == 5 ~ 1,
+      .default = .x
+    )
+  ))
+```
+
+Sum the responses to each part to calculate a total social isolation score.
+
+```{r}
+mh$q13$q13 <- rowSums(
+  mh$q13 |>
+    select(starts_with("q13."))
+)
+```
+
+Drop individual question variables.
+
+```{r}
+mh$q13 <- mh$q13 |>
+  select(-matches("^q13\\.\\d"))
+```
+
+Assign range values.
+
+```{r}
+mh$q13 <- mh$q13 |>
+  mutate(q13 = case_when(
+    q13 >= 11 & q13 <= 25 ~ 1, # Low
+    q13 >= 26 & q13 <= 40 ~ 2, # Medium
+    q13 >= 41 & q13 <= 55 ~ 3, # High
+    .default = NA
+  ))
+```
+
+```{r include=FALSE}
+# df <- mh$q13
+```
+
+## Q14: Social media addiction
+
+### Check NAs
+
+Check for `NA` values.
+
+```{r}
+apply(
+  mh$q14 |>
+    select(starts_with("q14")),
+  2,
+  function(x) sum(is.na(x))
+)
+```
+
+Count "Don't know" (`9`) responses for each question.
+
+```{r}
+apply(
+  mh$q14 |>
+    select(starts_with("q14")),
+  2,
+  function(x) sum(ifelse(x == 9, TRUE, FALSE))
+)
+```
+
+### Check "Don't knows"
+
+Number of respondents without any "Don't know" responses in Q14.
+
+```{r}
+mh$q14 |>
+  filter(!if_any(starts_with("q14."), ~ .x == 9)) |>
+  nrow()
+```
+
+Plot the number of "Don't know" responses per individual.
+
+```{r}
+mh$q14$n_dontknow <- apply(
+  mh$q14 |>
+    select(starts_with("q14.")),
+  1,
+  function(x) sum(ifelse(x == 9, TRUE, FALSE))
+)
+mh$q14$n_answered <- 6 - mh$q14$n_dontknow
+```
+
+```{r fig.width=6}
+mh$q14 |>
+  ggplot(aes(n_dontknow)) +
+  geom_histogram(binwidth = 1)
+```
+
+### Score
+
+Filter out rows in which any part has a "Don't know" response.
+
+```{r}
+mh$q14 <- mh$q14 |>
+  filter(!if_any(starts_with("q14."), ~ .x == 9))
+```
+
+Sum the responses to each part to calculate a total social media addiction score.
+
+```{r}
+mh$q14$q14 <- rowSums(
+  mh$q14 |>
+    select(starts_with("q14."))
+)
+```
+
+Drop individual question variables.
+
+```{r}
+mh$q14 <- mh$q14 |>
+  select(-matches("^q14\\.\\d"))
+```
+
+Assign range values.
+
+```{r}
+mh$q14 <- mh$q14 |>
+  mutate(q14 = case_when(
+    q14 >= 6 & q14 <= 13 ~ 1, # Low
+    q14 >= 14 & q14 <= 22 ~ 2, # Medium
+    q14 >= 23 & q14 <= 30 ~ 3, # High
+    .default = NA
+  ))
+```
+
+```{r include=FALSE}
+# df <- mh$q14
+```
+
+## Q15: Hours on social media
+
+Assign range values.
+
+```{r}
+mh$q15 <- mh$q15 |>
+  mutate(q15 = case_when(
+    q15 == 0 ~ 1,
+    q15 >= 1 & q15 <= 4 ~ 2,
+    q15 >= 5 & q15 <= 8 ~ 3,
+    q15 > 8 & q15 <= 24 ~ 4,
+    .default = NA
+  ))
+```
+
+## Q16: Habitual sleep efficiency
+
+Convert time variables to HH:MM format.
+
+```{r}
+mh$q16 <- mh$q16 |>
+  mutate(
+    bed1 = number_to_time(q16.1),
+    wake1 = number_to_time(q16.2)
+  )
+```
+
+Validate times.
+
+```{r}
+mh$q16 |>
+  mutate(
+    val_bed = validate_time(bed1),
+    val_wake = validate_time(wake1)
+  ) |>
+  filter(!val_bed | !val_wake) |>
+  select(q16.1:val_wake)
+```
+
+Convert bed time and wake time pairs to date objects.
+
+```{r}
+ls <- times_to_dates(mh$q16$bed1, mh$q16$wake1)
+names(ls) <- c("bed2", "wake2")
+
+mh$q16 <- mh$q16 |>
+  bind_cols(ls)
+```
+
+Validate times (relative to one another).
+
+```{r}
+mh$q16 |>
+  filter(bed2 > wake2)
+```
+
+Calculate the number of hours spent in bed.
+
+```{r}
+mh$q16$hrs_in_bed <- as.numeric(difftime(
+  mh$q16$wake2,
+  mh$q16$bed2,
+  "hours"
+))
+```
+
+Validate `hrs_in_bed`.
+
+```{r}
+any(mh$q16$hrs_in_bed < 0, na.rm = TRUE)
+```
+
+Calculate PSQI Component 4: Habitual sleep efficiency.
+
+```{r}
+mh$q16 <- mh$q16 |>
+  mutate(hse = q16.3 / hrs_in_bed * 100) |>
+  mutate(q16 = score_hse(hse))
+```
+
+View percentages > 100.
+
+```{r}
+mh$q16 |>
+  filter(hse > 100) |>
+  select(q16.1:last_col())
+```
+
+Filter out percentages > 100.
+
+```{r}
+mh$q16 <- mh$q16 |>
+  filter(hse <= 100)
+```
+
+Drop individual question variables.
+
+```{r}
+mh$q16 <- mh$q16 |>
+  select(-matches("^q16\\.\\d"))
+```
+
+## Q17: Time to fall asleep
+
+Assign range values.
+
+```{r}
+mh$q17 <- mh$q17 |>
+  mutate(q17 = case_when(
+    q17 > 0 & q17 <= 10 ~ 1,
+    q17 >= 11 & q17 <= 30 ~ 2,
+    q17 >= 31 & q17 <= 60 ~ 3,
+    q17 >= 61 & q17 <= 120 ~ 4,
+    q17 >= 121 & q17 <= 3600 ~ 5,
+    .default = NA
+  ))
+```
+
+# Summarize results
+
+Each question is summarized with and without a grouping variable. "Don't knows" and non-response values are not included.
+
+```{r}
+cbq <- cbq |>
+  distinct(nm3, .keep_all = TRUE)
+
+disaggs <- list(
+  list(name = "full", var = NULL, label = NULL),
+  list(name = "sex", var = "birth_gender", label = "Birth gender"),
+  list(name = "age", var = "age_group", label = "Age"),
+  list(name = "race", var = "race3", label = "Race"),
+  list(name = "hispanic", var = "hispanic_origin", label = "Hispanic origin"),
+  list(name = "region", var = "region", label = "HOI region")
+)
+
+mh_sum <- list()
+
+for (i in 1:length(mh)) {
+  mh_sum[[cbq$nm3[i]]] <- list()
+  for (j in 1:length(disaggs)) {
+    mh_sum[[i]][[disaggs[[j]]$name]] <- mh[[i]] |>
+      summarize_results(
+        var1 = cbq$nm3[i],
+        var2 = disaggs[[j]]$var,
+        cb_vals = codebook[[cbq$codesheet[i]]]$val
+      ) |>
+      rename(val = cbq$nm3[i]) |>
+      left_join(codebook[[cbq$codesheet[i]]], by = "val")
+  }
+}
+```
+
+# Save
+
+```{r}
+saveRDS(cbq, "../data/3-final/codebook_question_data.rds")
+saveRDS(disaggs, "../data/3-final/disaggregate_data_for_summary.rds")
+saveRDS(surv_demo, "../data/3-final/survey_demographic_data.rds")
+saveRDS(surv_rgn, "../data/3-final/survey_region_data.rds")
+saveRDS(mh, "../data/3-final/scored_results.rds")
+saveRDS(mh_sum, "../data/3-final/summarized_results.rds")
+```
+

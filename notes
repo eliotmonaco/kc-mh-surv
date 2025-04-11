@@ -1,0 +1,46 @@
+Validity checks
+- Subscales: check for responses that are all the same number
+- Sample: check that demographics and geography match known/estimated pop.
+
+
+PSQI measure
+- check scoring methodology
+- reject scores with percent > 100
+
+
+Scatter plot to check correlation between
+- sleep quality & anxiety
+
+
+Age groups
+- generally use ACS groups
+- age groups okay, add 65+ and 85+
+  - raw data contains age group only, not year of age, so it's possible to lump existing groups (e.g., lump the 75+ into the 65+ group) but we can't split any groups
+
+
+Bins for Q13 - social isolation
+(11 parts ranging from 1 to 5; min score = 11, max score = 55)
+11-25 Low
+26-40 Medium
+41-55 High
+
+Bins for Q14 - social media addiction
+(6 parts ranging from 1 to 5; min score = 6, max score = 30)
+6-13 Low
+14-22 Medium
+23-30 High
+
+Bins for Q15 - # hrs spent on social media
+0
+1-4
+5-8
+> 8
+
+Bins for Q17 - time to fall asleep at night
+0-10
+11-30
+31-60
+61-120
+> 120
+
+

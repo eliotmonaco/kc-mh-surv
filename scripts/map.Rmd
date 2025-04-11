@@ -1,0 +1,110 @@
+---
+title: "Map of survey sample"
+subtitle:
+author:
+  - name: "Eliot Monaco"
+    affiliation:
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output: html_notebook
+---
+
+# Purpose
+
+Create an interactive map of the survey sample.
+
+# Set up environment and import data
+
+```{r message=FALSE}
+library(tidyverse)
+library(sf)
+library(leaflet)
+library(htmltools)
+library(htmlwidgets)
+```
+
+```{r}
+source("fn.R")
+```
+
+Import survey and HOI region data.
+
+```{r}
+surv_rgn <- readRDS("../data/3-final/survey_region_data.rds")
+hoi_regions <- st_read("../data/1-source/hoi_regions.shp", quiet = TRUE)
+```
+
+# Map
+
+```{r}
+style <- paste(
+  ".leaflet-control.map-title {",
+  # "transform: translate(50%,50%);",
+  "position: fixed !important;",
+  # "left: 45%;",
+  "right: 5%;",
+  "text-align: center;",
+  "padding-left: 10px;",
+  "padding-right: 10px;",
+  "background: rgba(255,255,255,0.75);",
+  "font-weight: bold;",
+  "font-size: 28px;",
+  "}",
+  sep = "\n"
+)
+
+tag.map.title <- tags$style(HTML(style))
+
+title <- tags$div(
+  tag.map.title,
+  HTML(
+    paste(
+      "Geographical distribution of respondents to the",
+      "2024 Kansas City Mental Health Survey",
+      "(n = 648)"
+    )
+  )
+)
+```
+
+```{r}
+surv_map <- leaflet() |>
+  addProviderTiles(
+    "OpenStreetMap",
+    group = "OpenStreetMap"
+  ) |>
+  addPolygons(
+    data = hoi_regions,
+    fillColor = c("red", "green", "yellow")
+  ) |>
+  addCircleMarkers(
+    data = surv_rgn,
+    radius = 1,
+    color = "black"
+  ) |>
+  addControl(html = title, position = "topleft", className = "map-title")
+```
+
+```{r fig.height=10, fig.width=9}
+# surv_map
+```
+
+# Save
+
+```{r}
+fp <- "../output/survey-sample-map.html"
+
+if (file.exists(fp)) {
+  unlink(
+    c(fp, sub("\\.html", "_files", fp)),
+    recursive = TRUE,
+    force = TRUE
+  )
+}
+
+saveWidget(
+  widget = surv_map,
+  file = fp,
+  selfcontained = TRUE
+)
+```
+

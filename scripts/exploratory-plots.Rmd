@@ -1,0 +1,95 @@
+---
+title: "MH survey: Exploratory plots"
+subtitle:
+author:
+  - name: "Eliot Monaco"
+    affiliation:
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output: html_notebook
+---
+
+# Purpose
+
+Plot survey results summarized by demographic and geographic variables for exploration.
+
+# Set up environment and import data
+
+```{r setup}
+knitr::opts_chunk$set(
+  fig.width = 9,
+  fig.height = 9
+)
+```
+
+```{r message=FALSE}
+library(tidyverse)
+library(patchwork)
+```
+
+```{r}
+source("fn.R")
+```
+
+Import summarized survey results.
+
+```{r}
+mh_sum <- readRDS("../data/3-final/summarized_results.rds")
+cbq <- readRDS("../data/3-final/codebook_question_data.rds")
+disaggs <- readRDS("../data/3-final/disaggregate_data_for_summary.rds")
+```
+
+# Plots
+
+```{r}
+mh_plots <- list()
+
+for (i in 1:length(mh_sum)) {
+  mh_plots[[cbq$nm3[i]]] <- list()
+  for (j in 2:length(mh_sum[[i]])) {
+    mh_plots[[i]][[disaggs[[j]]$name]] <- mh_barplot1(
+      mh_sum[[i]][[j]],
+      yvar = disaggs[[j]]$var,
+      ylab = disaggs[[j]]$label,
+      legend_title = cbq$measure[i]
+    )
+  }
+}
+```
+
+```{css}
+/* Gets rid of patchwork positioning dataframe weirdly printed by RStudio */
+.pagedtable-wrapper {
+  visibility: hidden;
+}
+```
+
+## Plot tabs {.tabset}
+
+```{r results='asis', echo=FALSE}
+# for (i in 1:length(mh_plots)) {
+for (i in 8:9) {
+  cat(paste0("### ", toupper(cbq$nm3[i]), "\n\n"))
+  pw <- wrap_plots(
+    mh_plots[[i]],
+    ncol = 1,
+    guides = "collect",
+    axes = "collect_x"
+  ) +
+    plot_layout(
+      heights = unit(
+        c(2, 5, 3, 2, 3) * .3 + .2,
+        rep("inches", 5)
+      )
+    ) +
+    plot_annotation(
+      title = str_wrap(cbq$plot_title[i], width = 80),
+      theme = theme(plot.title = element_text(
+        hjust = .5,
+        size = rel(1.2)
+      ))
+    )
+  print(pw)
+  plot.new()
+  dev.off()
+}
+```

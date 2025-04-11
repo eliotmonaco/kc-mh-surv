@@ -1,0 +1,5 @@
+html_notebook:
+  code_folding: hide
+  number_sections: false
+  toc: true
+  toc_float: true

@@ -1,0 +1,98 @@
+---
+title: "Selected plots from the 2024 KCHD Mental Health Survey"
+output: flexdashboard::flex_dashboard
+---
+
+```{r setup}
+knitr::opts_chunk$set(
+  echo = FALSE
+)
+```
+
+```{r message=FALSE}
+library(tidyverse)
+library(kcData)
+```
+
+```{r}
+source("../fn.R")
+```
+
+```{r}
+mh_sum <- readRDS("../../data/3-final/summarized_results.rds")
+cbq <- readRDS("../../data/3-final/codebook_question_data.rds")
+disaggs <- readRDS("../../data/3-final/disaggregate_data_for_summary.rds")
+surv_rgn <- readRDS("../../data/3-final/survey_region_data.rds")
+```
+
+Column {.tabset data-width=800}
+----------------------------------------
+
+```{r}
+q <- c("q8", "q10", "q13")
+
+mh_sum <- mh_sum[q]
+cbq <- cbq |>
+  filter(nm3 %in% q)
+```
+
+```{r}
+mh_plots <- list()
+
+for (i in 1:length(mh_sum)) {
+  df <- mh_sum[[i]][[3]]
+  n = sum(df$n)
+  lvl <- length(levels(df$defn))
+  df <- df |>
+    filter(!defn %in% levels(defn)[lvl])
+  mh_plots[[cbq$nm3[i]]] <- mh_barplot3(
+    df,
+    yvar = disaggs[[3]]$var,
+    ylab = disaggs[[3]]$label,
+    legend_title = cbq$measure[i],
+    plot_title = cbq$plot_title[i],
+    n_sample = n
+  )
+}
+```
+
+### 1
+
+```{r}
+print(mh_plots[[1]])
+```
+
+### 2
+
+```{r}
+print(mh_plots[[2]])
+```
+
+### 3
+
+```{r}
+print(mh_plots[[3]])
+```
+
+Column {data-width=400}
+----------------------------------------
+
+```{r}
+ggplot() +
+  geom_sf(
+    data = map_city_2024,
+    fill = "darkgrey",
+    color = "red"
+  ) +
+  geom_sf(data = surv_rgn) +
+  theme_void() +
+  ggtitle(label = "Survey sample geographic distribution") +
+  ggplot2::theme(
+    plot.title = ggplot2::element_text(
+      hjust = .5,
+      size = 16
+    )
+  ) +
+  ggplot2::labs(caption = "Total survey sample size = 648\n")
+```
+
